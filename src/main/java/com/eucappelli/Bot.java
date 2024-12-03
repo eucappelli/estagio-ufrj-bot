@@ -1,6 +1,12 @@
 package com.eucappelli;
 
+import com.eucappelli.enums.ContractField;
+import com.eucappelli.enums.DrawnType;
+import com.eucappelli.enums.RequestStatus;
+import com.eucappelli.enums.UserField;
+import com.eucappelli.models.ContractDTO;
 import com.eucappelli.models.FileDTO;
+import com.eucappelli.models.RequestDTO;
 import com.eucappelli.models.UserDTO;
 import com.eucappelli.utils.PropertiesLoader;
 import com.eucappelli.utils.Strings;
@@ -21,11 +27,15 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 public class Bot extends TelegramLongPollingBot {
     private final List<UserDTO> connectedUsers = new ArrayList<>();
+    private final List<RequestDTO> requests = new ArrayList<>();
     @Override
     public String getBotUsername() {
         return PropertiesLoader.getBotUsername();
@@ -40,6 +50,7 @@ public class Bot extends TelegramLongPollingBot {
     public void onUpdateReceived(Update update) {
         try {
             log.info("Connected users: {}", connectedUsers);
+            log.info("Requests: {}", requests);
             if (update.getMessage() == null) {
                 handleCallback(update);
             } else {
@@ -58,7 +69,12 @@ public class Bot extends TelegramLongPollingBot {
         Long chatId = callbackQuery.getMessage().getChatId();
         Integer messageId = callbackQuery.getMessage().getMessageId();
         if (data != null) {
-            handleOldUser(getUser(userId), data);
+            UserDTO user = getUser(userId);
+            if (user.getBoletimFile() != null && user.getContract() == null) {
+                userInfoMessage(user, data);
+            } else {
+                handleOldUser(user, update);
+            }
             dismissMenu(queryId, chatId, messageId);
         }
     }
@@ -71,7 +87,11 @@ public class Bot extends TelegramLongPollingBot {
         if (userDTO == null) {
             handleNewUser(update);
         } else {
-            handleOldUser(userDTO, update);
+            if (update.getMessage().isCommand()) {
+                handleCommands(userDTO, update);
+            } else {
+                handleOldUser(userDTO, update);
+            }
         }
     }
 
@@ -81,6 +101,20 @@ public class Bot extends TelegramLongPollingBot {
             return optional.orElse(null);
         } catch (Exception e) {
             log.error(Strings.ERROR_GETTING_USER, e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    private List<RequestDTO> getRequests(Long userId) {
+        return requests.stream().filter(requestDTO -> requestDTO.getUserId().equals(userId)).toList();
+    }
+
+    private RequestDTO getRequest(Long userId) {
+        try {
+            var optional = requests.stream().filter(requestDTO -> requestDTO.getUserId().equals(userId)).findFirst();
+            return optional.orElse(null);
+        } catch (Exception e) {
+            log.error(Strings.ERROR_GETTING_REQUEST, e);
             throw new RuntimeException(e);
         }
     }
@@ -96,18 +130,22 @@ public class Bot extends TelegramLongPollingBot {
     }
 
     private void handleOldUser(UserDTO user, Update update) {
-        if (user.getLeftToComplete() == null) {
-            handleOldUser(user, update.getMessage().getText());
+        String message = update == null ? null :
+                update.getMessage() != null ? update.getMessage().getText() : update.getCallbackQuery().getData();
+        if (!user.allInfoDone()) {
+            handleOldUser(user, message);
         } else if (user.getBoaFile() == null) {
             boaFileHandler(user, update);
         } else if (user.getBoletimFile() == null) {
             boletimFileHandler(user, update);
-        } else if (user.getContract() == null) {
-            contractHandler(user, update.getMessage().getText());
+        } else if (!user.allContractDone()) {
+            contractHandler(user, message);
         } else if (user.getContract().getContractFile() == null) {
             contractFileHandler(user, update);
-        } else if (user.getContract().getReportFile() == null) {
-            reportFileHandler(user, update);
+        } else if (getRequests(user.getId()).isEmpty()) {
+            contractInfoMessage(user, message);
+        } else {
+            handleRequests(user);
         }
     }
 
@@ -122,28 +160,125 @@ public class Bot extends TelegramLongPollingBot {
             dreHandler(user, message);
         } else if (user.getIsRenewal() == null) {
             isRenewalHandler(user, message);
-        } else if (user.getRenewalNumber() == null) {
-            renewalHandler(user, message);
-            craHandler(user, null);
-        } else if (user.getRequestNumber() == null) {
-            requestHandler(user, message);
-            craHandler(user, null);
         } else if (user.getCra() == null) {
             craHandler(user, message);
-        } else if (user.getHasCompleted() == null) {
-            completedHandler(user, message);
         } else if (user.getLeftToComplete() == null) {
             leftToCompleteHandler(user, message);
         }
     }
 
-    private void userInfoMessage(UserDTO user) {
-        sendText(user.getId(), Strings.INFO_HEADER);
-        sendText(user.getId(), user.infoConfirmation());
-        contractHandler(user, null);
+    private void handleRequests(UserDTO user) {
+        sendText(user.getId(), Strings.STATUS_TEXT);
+        sendText(user.getId(), Strings.INFO_TEXT);
+        sendText(user.getId(), Strings.EDIT_INFO_TEXT);
+        sendText(user.getId(), Strings.EDIT_CONTRACT_TEXT);
+        sendText(user.getId(), Strings.REJECTED_WARNING_TEXT);
+        sendText(user.getId(), Strings.ACCEPTED_WARNING_TEXT);
+    }
+
+    private void handleCommands(UserDTO user, Update update) {
+        String message = update.getMessage().getText();
+        switch (message) {
+            case "/status" -> {
+                RequestDTO requestDTO = getRequest(user.getId());
+                sendText(user.getId(), requestDTO.requestInfo());
+            }
+            case "/allinfo" -> {
+                RequestDTO requestDTO = getRequest(user.getId());
+                sendText(user.getId(), requestDTO.getUser().infoConfirmation());
+                sendText(user.getId(), requestDTO.getUser().getContract().contractConfirmation());
+            }
+            case "/editinfo" -> userInfoMessage(user, null);
+            case "/editcontract" -> contractInfoMessage(user, null);
+            case null, default -> handleOldUser(user, (Update) null);
+        }
+    }
+
+    private void userInfoMessage(UserDTO user, String message) {
+        if (message == null) {
+            Map<String, String> map = getInfoMap();
+            sendText(user.getId(), Strings.INFO_HEADER);
+            sendText(user.getId(), user.infoConfirmation());
+            sendMenu(user.getId(), Strings.CONFIRMATION_QUESTION, createMultipleMenu(map));
+        } else {
+            UserField field = UserField.valueOf(message);
+            if (field != UserField.NONE) {
+                switch (field) {
+                    case BOA -> user.setBoaFile(null);
+                    case BOLETIM -> user.setBoletimFile(null);
+                    case CRA -> user.setCra(null);
+                    case DRE -> user.setDre(null);
+                    case FULLNAME -> user.setFullName(null);
+                    case RENEWAL -> user.setIsRenewal(null);
+                    case LEFT_TO_COMPLETE -> user.setLeftToComplete(null);
+                }
+            }
+            handleOldUser(user, (Update) null);
+        }
+    }
+
+    private static Map<String, String> getInfoMap() {
+        Map<String, String> map = new HashMap<>();
+        map.put(Strings.NONE, UserField.NONE.name());
+        map.put(Strings.FULL_NAME, UserField.FULLNAME.name());
+        map.put(Strings.DRE, UserField.DRE.name());
+        map.put(Strings.RENEWAL, UserField.RENEWAL.name());
+        map.put(Strings.CRA, UserField.CRA.name());
+        map.put(Strings.LEFT_TO_COMPLETE, UserField.CRA.name());
+        map.put(Strings.BOA, UserField.BOA.name());
+        map.put(Strings.BOLETIM, UserField.BOLETIM.name());
+        return map;
+    }
+
+    private void contractInfoMessage(UserDTO user, String message) {
+        if (message == null) {
+            Map<String, String> map = getContractMap();
+            sendText(user.getId(), Strings.INFO_HEADER);
+            sendText(user.getId(), user.getContract().contractConfirmation());
+            sendMenu(user.getId(), Strings.SEND_QUESTION, createMultipleMenu(map));
+        } else {
+            ContractField field = ContractField.valueOf(message);
+            if (field != ContractField.SEND) {
+                switch (field) {
+                    case COMPANY_NAME -> user.getContract().setCompanyName(null);
+                    case COMPANY_EMAIL -> user.getContract().setCompanyEmail(null);
+                    case DRAWN_BY -> user.getContract().setDrawnType(null);
+                    case START_DATE -> user.getContract().setStartDate(null);
+                    case END_DATE -> user.getContract().setEndDate(null);
+                    case CONTRACT_FILE -> user.getContract().setContractFile(null);
+                }
+                handleOldUser(user, (Update) null);
+            } else {
+                Date date = new Date();
+                RequestDTO requestDTO = new RequestDTO();
+                requestDTO.setId(date.getTime());
+                requestDTO.setDate(date);
+                requestDTO.setStatus(RequestStatus.SENT);
+                requestDTO.setUserId(user.getId());
+                requestDTO.setUser(user);
+                sendText(user.getId(), Strings.REQUEST_SENT);
+                requests.add(requestDTO);
+                handleOldUser(user, (Update) null);
+            }
+        }
+    }
+
+    private static Map<String, String> getContractMap() {
+        Map<String, String> map = new HashMap<>();
+        map.put(Strings.SEND, ContractField.SEND.name());
+        map.put(Strings.COMPANY_NAME, ContractField.COMPANY_NAME.name());
+        map.put(Strings.EMAIL, ContractField.COMPANY_EMAIL.name());
+        map.put(Strings.DRAWN_BY, ContractField.DRAWN_BY.name());
+        map.put(Strings.START_DATE, ContractField.START_DATE.name());
+        map.put(Strings.END_DATE, ContractField.END_DATE.name());
+        map.put(Strings.CONTRACT, ContractField.CONTRACT_FILE.name());
+        return map;
     }
 
     private void contractHandler(UserDTO user, String message) {
+        if (user.getContract() == null) {
+            user.setContract(new ContractDTO());
+        }
         if (user.getContract().getCompanyName() == null) {
             companyNameHandler(user, message);
         } else if (user.getContract().getCompanyEmail() == null) {
@@ -157,25 +292,77 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    private void reportFileHandler(UserDTO user, Update update) {
-    }
-
     private void contractFileHandler(UserDTO user, Update update) {
+        if (user.getContract().getContractFile() == null && update == null) {
+            sendText(user.getId(), Strings.CONTRACT_FILE_QUESTION);
+        } else {
+            FileDTO dto = handleFile(user, update);
+            user.getContract().setContractFile(dto);
+            sendText(user.getId(), Strings.SUCCESS_FILE);
+            handleOldUser(user, (Update) null);
+        }
     }
 
     private void endDateHandler(UserDTO user, String message) {
+        if (user.getContract().getEndDate() == null && message == null) {
+            sendText(user.getId(), Strings.END_DATE);
+        } else {
+            if (Validators.isValidDate(message)) {
+                user.getContract().setEndDate(message);
+                handleOldUser(user, (Update) null);
+            } else {
+                sendText(user.getId(), Strings.INVALID_DATE);
+            }
+        }
     }
 
     private void startDateHandler(UserDTO user, String message) {
+        if (user.getContract().getStartDate() == null && message == null) {
+            sendText(user.getId(), Strings.START_DATE);
+        } else {
+            if (Validators.isValidDate(message)) {
+                user.getContract().setStartDate(message);
+                handleOldUser(user, (Update) null);
+            } else {
+                sendText(user.getId(), Strings.INVALID_DATE);
+            }
+        }
     }
 
     private void drawnTypeHandler(UserDTO user, String message) {
+        if (user.getContract().getDrawnType() == null && message == null) {
+            Map<String, String> drawnTypes = new HashMap<>();
+            drawnTypes.put(Strings.COMPANY, DrawnType.COMPANY.name());
+            drawnTypes.put(Strings.AGENCY, DrawnType.AGENCY.name());
+            drawnTypes.put(Strings.UNKNOWN, DrawnType.UNKNOWN.name());
+            sendMenu(user.getId(), Strings.DRAWN_BY_QUESTION, createMultipleMenu(drawnTypes));
+        } else {
+            DrawnType drawnType = DrawnType.valueOf(message);
+            user.getContract().setDrawnType(drawnType);
+            handleOldUser(user, (Update) null);
+        }
     }
 
     private void companyEmailHandler(UserDTO user, String message) {
+        if (user.getContract().getCompanyEmail() == null && message == null) {
+            sendText(user.getId(), Strings.COMPANY_EMAIL_QUESTION);
+        } else {
+            if (Validators.isValidEmail(message)) {
+                user.getContract().setCompanyEmail(message);
+                handleOldUser(user, (Update) null);
+            } else {
+                sendText(user.getId(), Strings.INVALID_EMAIL);
+            }
+        }
     }
 
     private void companyNameHandler(UserDTO user, String message) {
+        if (user.getContract().getCompanyName() == null && message == null) {
+            sendText(user.getId(), Strings.COMPANY_NAME_QUESTION);
+        } else {
+            user.getContract().setCompanyName(message);
+            handleOldUser(user, (Update) null);
+        }
     }
 
     private void boletimFileHandler(UserDTO user, Update update) {
@@ -185,7 +372,7 @@ public class Bot extends TelegramLongPollingBot {
             FileDTO dto = handleFile(user, update);
             user.setBoletimFile(dto);
             sendText(user.getId(), Strings.SUCCESS_FILE);
-            userInfoMessage(user);
+            userInfoMessage(user, null);
         }
     }
 
@@ -196,7 +383,7 @@ public class Bot extends TelegramLongPollingBot {
             FileDTO dto = handleFile(user, update);
             user.setBoaFile(dto);
             sendText(user.getId(), Strings.SUCCESS_FILE);
-            boletimFileHandler(user, null);
+            handleOldUser(user, (Update) null);
         }
     }
 
@@ -206,23 +393,7 @@ public class Bot extends TelegramLongPollingBot {
         } else {
             Integer left = Integer.valueOf(message);
             user.setLeftToComplete(left);
-            boaFileHandler(user, null);
-        }
-    }
-
-    private void completedHandler(UserDTO user, String message) {
-        if (user.getHasCompleted() == null && message == null) {
-            sendMenu(user.getId(), Strings.COMPLETED_QUESTION, createMenu());
-        } else {
-            Boolean isCompleted = Boolean.parseBoolean(message);
-            user.setHasCompleted(isCompleted);
-            if (isCompleted) {
-                user.setLeftToComplete(0);
-                sendText(user.getId(), String.format(Strings.SELECTED_OPTION, user.getCompleted()));
-                boaFileHandler(user, null);
-            } else {
-                leftToCompleteHandler(user, null);
-            }
+            handleOldUser(user, (Update) null);
         }
     }
 
@@ -232,44 +403,21 @@ public class Bot extends TelegramLongPollingBot {
         } else {
             if (Validators.isValidCRA(message)) {
                 user.setCra(message);
-                completedHandler(user, null);
+                handleOldUser(user, (Update) null);
             } else {
                 sendText(user.getId(), Strings.INVALID_CRA);
             }
         }
     }
 
-    private void requestHandler(UserDTO user, String message) {
-        if (user.getRequestNumber() == null && message == null) {
-            sendText(user.getId(), Strings.REQUEST_NUMBER_QUESTION);
-        } else {
-            user.setRequestNumber(Integer.valueOf(message));
-            sendText(user.getId(), String.format(Strings.REQUEST_NUMBER_REPLY, user.getRequestNumber()));
-        }
-    }
-
-    private void renewalHandler(UserDTO user, String message) {
-        if (user.getRenewalNumber() == null && message == null) {
-            sendText(user.getId(), Strings.RENEWAL_NUMBER_QUESTION);
-        } else {
-            user.setRenewalNumber(Integer.valueOf(message));
-            sendText(user.getId(), String.format(Strings.RENEWAL_NUMBER_REPLY, user.getRenewalNumber()));
-        }
-    }
-
     private void isRenewalHandler(UserDTO user, String message) {
-        if (user.getRenewalNumber() == null && message == null) {
-            sendMenu(user.getId(), Strings.RENEWAL_QUESTION, createMenu());
+        if (user.getIsRenewal() == null && message == null) {
+            sendMenu(user.getId(), Strings.RENEWAL_QUESTION, createConfirmationMenu());
         } else {
             Boolean isRenewal = Boolean.parseBoolean(message);
             user.setIsRenewal(isRenewal);
             sendText(user.getId(), String.format(Strings.SELECTED_OPTION, user.getRenewal()));
-            if (isRenewal) {
-                renewalHandler(user, null);
-            } else {
-                user.setRenewalNumber(0);
-                requestHandler(user, null);
-            }
+            handleOldUser(user, (Update) null);
         }
     }
 
@@ -280,7 +428,7 @@ public class Bot extends TelegramLongPollingBot {
             if (Validators.isValidDre(message)) {
                 user.setDre(message);
                 sendText(user.getId(), String.format(Strings.ADDED_DRE, message));
-                isRenewalHandler(user, null);
+                handleOldUser(user, (Update) null);
             } else {
                 sendText(user.getId(), Strings.INVALID_DRE);
             }
@@ -293,7 +441,7 @@ public class Bot extends TelegramLongPollingBot {
         } else {
             if (Validators.isValidName(message)) {
                 user.setFullName(message);
-                dreHandler(user, null);
+                handleOldUser(user, (Update) null);
             } else {
                 sendText(user.getId(), Strings.INVALID_NAME);
             }
@@ -310,7 +458,27 @@ public class Bot extends TelegramLongPollingBot {
         }
     }
 
-    private InlineKeyboardMarkup createMenu() {
+    private List<InlineKeyboardButton> createRow(String text, String callbackData) {
+        List<InlineKeyboardButton> row = new ArrayList<>();
+        row.add(InlineKeyboardButton.builder()
+                .text(text)
+                .callbackData(callbackData)
+                .build());
+        return row;
+    }
+
+    private InlineKeyboardMarkup createMultipleMenu(Map<String, String> options) {
+        List<List<InlineKeyboardButton>> rows = new ArrayList<>();
+        
+        for (Map.Entry<String, String> entry : options.entrySet()) {
+            List<InlineKeyboardButton> row = createRow(entry.getKey(), entry.getValue());
+            rows.add(row);
+        }
+
+        return InlineKeyboardMarkup.builder().keyboard(rows).build();
+    }
+
+    private InlineKeyboardMarkup createConfirmationMenu() {
         var no = InlineKeyboardButton.builder()
                 .text(Strings.NO).callbackData(Boolean.FALSE.toString())
                 .build();
