@@ -297,9 +297,11 @@ public class Bot extends TelegramLongPollingBot {
             sendText(user.getId(), Strings.CONTRACT_FILE_QUESTION);
         } else {
             FileDTO dto = handleFile(user, update);
-            user.getContract().setContractFile(dto);
-            sendText(user.getId(), Strings.SUCCESS_FILE);
-            handleOldUser(user, (Update) null);
+            if (dto != null) {
+                user.getContract().setContractFile(dto);
+                sendText(user.getId(), Strings.SUCCESS_FILE);
+                handleOldUser(user, (Update) null);
+            }
         }
     }
 
@@ -370,9 +372,11 @@ public class Bot extends TelegramLongPollingBot {
             sendText(user.getId(), String.format(Strings.FILE_QUESTION, "Boletim"));
         } else {
             FileDTO dto = handleFile(user, update);
-            user.setBoletimFile(dto);
-            sendText(user.getId(), Strings.SUCCESS_FILE);
-            userInfoMessage(user, null);
+            if (dto != null) {
+                user.setBoletimFile(dto);
+                sendText(user.getId(), Strings.SUCCESS_FILE);
+                userInfoMessage(user, null);
+            }
         }
     }
 
@@ -381,9 +385,11 @@ public class Bot extends TelegramLongPollingBot {
             sendText(user.getId(), String.format(Strings.FILE_QUESTION, "BOA"));
         } else {
             FileDTO dto = handleFile(user, update);
-            user.setBoaFile(dto);
-            sendText(user.getId(), Strings.SUCCESS_FILE);
-            handleOldUser(user, (Update) null);
+            if (dto != null) {
+                user.setBoaFile(dto);
+                sendText(user.getId(), Strings.SUCCESS_FILE);
+                handleOldUser(user, (Update) null);
+            }
         }
     }
 
@@ -542,6 +548,7 @@ public class Bot extends TelegramLongPollingBot {
                 sendText(user.getId(), Strings.INVALID_FILE);
             }
         }
+        sendText(user.getId(), Strings.PDF_WARNING);
         return null;
     }
 }

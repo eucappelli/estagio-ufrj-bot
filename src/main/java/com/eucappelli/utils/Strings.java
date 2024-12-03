@@ -27,7 +27,7 @@ public class Strings {
     public static final String LEFT_TO_COMPLETE = "Disciplinas faltantes até o 4º período";
     public static final String BOA = "BOA";
     public static final String BOLETIM = "Boletim";
-    public static final String CONFIRMATION_QUESTION = "Se precisa editar alguma informação, escolha uma opção abaixo. Caso não precise, escolha 'Nenhuma'";
+    public static final String CONFIRMATION_QUESTION = "Se precisar editar alguma informação, escolha uma opção abaixo. Caso não precise, escolha 'Nenhum'";
     public static final String SEND_QUESTION = "Se precisa editar alguma informação, escolha uma opção abaixo. Caso não precise, escolha 'Enviar' para enviar seu pedido";
     public static final String COMPANY_NAME_QUESTION = "Nome da Empresa onde fará estágio";
     public static final String COMPANY_EMAIL_QUESTION = "Email de contato da empresa (pode ser do supervisor ou do RH)";
@@ -61,6 +61,7 @@ public class Strings {
     public static final String AUTHORIZED_UNDER_CONDITION = "Aprovado condicionalmente";
     public static final String REASON = "Motivo";
     public static final String REQUEST_SENT = "Seu pedido foi enviado para a comissão de estágio com sucesso!";
+    public static final String PDF_WARNING = "Você precisa enviar um arquivo no formato PDF";
 
     public static final String USER_IS_NULL = "User is null";
     public static final String ERROR_WHILE_RECEIVING_UPDATE = "Error while receiving update";
